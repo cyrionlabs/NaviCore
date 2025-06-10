@@ -1,8 +1,8 @@
 [project]
-name = "browser-use"
-description = "Make websites accessible for AI agents"
-authors = [{ name = "Gregor Zunic" }]
-version = "0.2.5"
+name = "navicore"
+description = "The core CUA for Project Navi"
+authors = [{ name = "Trisanth Srinivasan" }]
+version = "0.0.1"
 readme = "README.md"
 requires-python = ">=3.11,<4.0"
 classifiers = [
@@ -67,11 +67,11 @@ examples = [
     "browserbase>=0.4.0",
 ]
 all = [
-    "browser-use[memory,cli,examples]",
+    "navicore[memory,cli,examples]",
 ]
 
 [project.urls]
-Repository = "https://github.com/browser-use/browser-use"
+Repository = "https://github.com/cyrionlabs/navicore"
 
 [project.scripts]
 browseruse = "browser_use.cli:main"

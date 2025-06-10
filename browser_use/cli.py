@@ -87,17 +87,37 @@ TEXTUAL_BORDER_STYLES = {'logo': 'blue', 'info': 'blue', 'input': 'orange3', 'wo
 
 def get_default_config() -> dict[str, Any]:
 	"""Return default configuration dictionary."""
+	# Check for API keys in environment
+	api_keys = {
+		'OPENAI_API_KEY': os.getenv('OPENAI_API_KEY', ''),
+		'ANTHROPIC_API_KEY': os.getenv('ANTHROPIC_API_KEY', ''),
+		'GOOGLE_API_KEY': os.getenv('GOOGLE_API_KEY', ''),
+		'DEEPSEEK_API_KEY': os.getenv('DEEPSEEK_API_KEY', ''),
+		'GROK_API_KEY': os.getenv('GROK_API_KEY', ''),
+		'AZURE_OPENAI_KEY': os.getenv('AZURE_OPENAI_KEY', ''),
+		'AZURE_OPENAI_ENDPOINT': os.getenv('AZURE_OPENAI_ENDPOINT', ''),
+	}
+
+	# Auto-detect model based on available API keys
+	model_name = None
+	if api_keys['OPENAI_API_KEY']:
+		model_name = 'gpt-4o'
+	elif api_keys['ANTHROPIC_API_KEY']:
+		model_name = 'claude-3-opus-20240229'
+	elif api_keys['GOOGLE_API_KEY']:
+		model_name = 'gemini-pro'
+	elif api_keys['DEEPSEEK_API_KEY']:
+		model_name = 'deepseek-chat'
+	elif api_keys['GROK_API_KEY']:
+		model_name = 'grok-1'
+	elif api_keys['AZURE_OPENAI_KEY'] and api_keys['AZURE_OPENAI_ENDPOINT']:
+		model_name = 'gpt-4o'  # Azure OpenAI model
+
 	return {
 		'model': {
-			'name': None,
+			'name': model_name,
 			'temperature': 0.0,
-			'api_keys': {
-				'OPENAI_API_KEY': os.getenv('OPENAI_API_KEY', ''),
-				'ANTHROPIC_API_KEY': os.getenv('ANTHROPIC_API_KEY', ''),
-				'GOOGLE_API_KEY': os.getenv('GOOGLE_API_KEY', ''),
-				'DEEPSEEK_API_KEY': os.getenv('DEEPSEEK_API_KEY', ''),
-				'GROK_API_KEY': os.getenv('GROK_API_KEY', ''),
-			},
+			'api_keys': api_keys,
 		},
 		'agent': {},  # AgentSettings will use defaults
 		'browser': {
@@ -110,37 +130,28 @@ def get_default_config() -> dict[str, Any]:
 
 
 def load_user_config() -> dict[str, Any]:
-	"""Load user configuration from file."""
-	if not USER_CONFIG_FILE.exists():
-		# Create default config
-		config = get_default_config()
-		save_user_config(config)
-		return config
-
+	"""Load user configuration from file or create default."""
 	try:
-		with open(USER_CONFIG_FILE) as f:
-			data = json.load(f)
-			# Ensure data is a dictionary, not a list
-			if isinstance(data, list):
-				# If it's a list, it's probably just command history from previous version
-				config = get_default_config()
-				config['command_history'] = data  # Use the list as command history
-				return config
-			return data
-	except (json.JSONDecodeError, FileNotFoundError):
-		# If file is corrupted, start with empty config
+		if USER_CONFIG_FILE.exists():
+			with open(USER_CONFIG_FILE, 'r') as f:
+				config = json.load(f)
+		else:
+			config = get_default_config()
+			save_user_config(config)
+		return config
+	except Exception as e:
+		logging.error(f'Error loading config: {e}')
 		return get_default_config()
 
 
 def save_user_config(config: dict[str, Any]) -> None:
 	"""Save user configuration to file."""
-	# Ensure command history doesn't exceed maximum length
-	if 'command_history' in config and isinstance(config['command_history'], list):
-		if len(config['command_history']) > MAX_HISTORY_LENGTH:
-			config['command_history'] = config['command_history'][-MAX_HISTORY_LENGTH:]
-
-	with open(USER_CONFIG_FILE, 'w') as f:
-		json.dump(config, f, indent=2)
+	try:
+		USER_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+		with open(USER_CONFIG_FILE, 'w') as f:
+			json.dump(config, f, indent=2)
+	except Exception as e:
+		logging.error(f'Error saving config: {e}')
 
 
 def update_config_with_click_args(config: dict[str, Any], ctx: click.Context) -> dict[str, Any]:
@@ -180,50 +191,37 @@ def setup_readline_history(history: list[str]) -> None:
 		readline.add_history(item)
 
 
-def get_llm(config: dict[str, Any]):
-	"""Get the language model based on config and available API keys."""
-	# Set API keys from config if available
-	api_keys = config.get('model', {}).get('api_keys', {})
-	model_name = config.get('model', {}).get('name')
-	temperature = config.get('model', {}).get('temperature', 0.0)
+def get_llm(config: dict[str, Any]) -> BaseChatModel:
+	"""Get LLM instance based on configuration."""
+	model_config = config.get('model', {})
+	model_name = model_config.get('name')
+	api_keys = model_config.get('api_keys', {})
 
-	# Set environment variables if they're in the config but not in the environment
-	if api_keys.get('openai') and not os.getenv('OPENAI_API_KEY'):
-		os.environ['OPENAI_API_KEY'] = api_keys['openai']
-	if api_keys.get('anthropic') and not os.getenv('ANTHROPIC_API_KEY'):
-		os.environ['ANTHROPIC_API_KEY'] = api_keys['anthropic']
-	if api_keys.get('google') and not os.getenv('GOOGLE_API_KEY'):
-		os.environ['GOOGLE_API_KEY'] = api_keys['google']
+	if not model_name:
+		raise ValueError('No model specified in configuration')
 
-	if model_name:
-		if model_name.startswith('gpt'):
-			if not os.getenv('OPENAI_API_KEY'):
-				print('⚠️  OpenAI API key not found. Please update your config or set OPENAI_API_KEY environment variable.')
-				sys.exit(1)
-			return langchain_openai.ChatOpenAI(model=model_name, temperature=temperature)
-		elif model_name.startswith('claude'):
-			if not os.getenv('ANTHROPIC_API_KEY'):
-				print('⚠️  Anthropic API key not found. Please update your config or set ANTHROPIC_API_KEY environment variable.')
-				sys.exit(1)
-			return langchain_anthropic.ChatAnthropic(model=model_name, temperature=temperature)
-		elif model_name.startswith('gemini'):
-			if not os.getenv('GOOGLE_API_KEY'):
-				print('⚠️  Google API key not found. Please update your config or set GOOGLE_API_KEY environment variable.')
-				sys.exit(1)
-			return langchain_google_genai.ChatGoogleGenerativeAI(model=model_name, temperature=temperature)
-
-	# Auto-detect based on available API keys
-	if os.getenv('OPENAI_API_KEY'):
-		return langchain_openai.ChatOpenAI(model='gpt-4o', temperature=temperature)
-	elif os.getenv('ANTHROPIC_API_KEY'):
-		return langchain_anthropic.ChatAnthropic(model='claude-3.5-sonnet-exp', temperature=temperature)
-	elif os.getenv('GOOGLE_API_KEY'):
-		return langchain_google_genai.ChatGoogleGenerativeAI(model='gemini-2.0-flash-lite', temperature=temperature)
+	if model_name.startswith('gpt-'):
+		if api_keys.get('AZURE_OPENAI_KEY') and api_keys.get('AZURE_OPENAI_ENDPOINT'):
+			return langchain_openai.AzureChatOpenAI(
+				model=model_name,
+				api_version='2024-02-15-preview',
+				azure_endpoint=api_keys['AZURE_OPENAI_ENDPOINT'],
+				api_key=api_keys['AZURE_OPENAI_KEY'],
+			)
+		else:
+			return langchain_openai.ChatOpenAI(model=model_name)
+	elif model_name.startswith('claude-'):
+		return langchain_anthropic.ChatAnthropic(model=model_name)
+	elif model_name.startswith('gemini-'):
+		return langchain_google_genai.ChatGoogleGenerativeAI(model=model_name)
+	elif model_name.startswith('deepseek-'):
+		# Add DeepSeek model initialization
+		raise NotImplementedError('DeepSeek models not yet implemented')
+	elif model_name.startswith('grok-'):
+		# Add Grok model initialization
+		raise NotImplementedError('Grok models not yet implemented')
 	else:
-		print(
-			'⚠️  No API keys found. Please update your config or set one of: OPENAI_API_KEY, ANTHROPIC_API_KEY, or GOOGLE_API_KEY.'
-		)
-		sys.exit(1)
+		raise ValueError(f'Unsupported model: {model_name}')
 
 
 class RichLogHandler(logging.Handler):
@@ -290,7 +288,7 @@ class BrowserUseApp(App):
 		max-height: 60vh;
 		border: solid $primary-darken-2;
 		padding: 1;
-		overflow-y: scroll;
+		overflow-y: auto;
 		margin: 1 0 0 0;
 	}
 	
@@ -409,10 +407,18 @@ class BrowserUseApp(App):
 		overflow-y: auto;
 		min-height: 5;
 	}
+	
+	#tasks-info {
+		height: auto;
+		overflow-y: visible;
+		background: $surface;
+		color: $text;
+		width: 100%;
+	}
 	"""
 
 	BINDINGS = [
-		Binding('ctrl+c', 'quit', 'Quit', priority=True, show=True),
+		Binding('ctrl+c', 'pause', 'Pause/Resume', priority=True, show=True),
 		Binding('ctrl+q', 'quit', 'Quit', priority=True),
 		Binding('ctrl+d', 'quit', 'Quit', priority=True),
 		Binding('up', 'input_history_prev', 'Previous command', show=False),
@@ -429,6 +435,9 @@ class BrowserUseApp(App):
 		self.task_history = config.get('command_history', [])
 		# Track current position in history for up/down navigation
 		self.history_index = len(self.task_history)
+		self.is_paused = False
+		self._pause_event = asyncio.Event()
+		self._pause_event.set()  # Initially not paused
 
 	def setup_richlog_logging(self) -> None:
 		"""Set up logging to redirect to RichLog widget instead of stdout."""
@@ -599,8 +608,12 @@ class BrowserUseApp(App):
 	async def on_key(self, event: events.Key) -> None:
 		"""Handle key events at the app level to ensure graceful exit."""
 		# Handle Ctrl+C, Ctrl+D, and Ctrl+Q for app exit
-		if event.key == 'ctrl+c' or event.key == 'ctrl+d' or event.key == 'ctrl+q':
+		if event.key == 'ctrl+q' or event.key == 'ctrl+d':
 			await self.action_quit()
+			event.stop()
+			event.prevent_default()
+		elif event.key == 'enter' and self.is_paused:
+			await self.action_pause()  # Resume
 			event.stop()
 			event.prevent_default()
 
@@ -1001,19 +1014,20 @@ class BrowserUseApp(App):
 			self.agent.running = True
 			self.agent.last_response_time = 0
 
-			# Panel updates are already happening via the timer in update_info_panels
-
 			try:
 				# Run the agent task, redirecting output to RichLog through our handler
-				await self.agent.run()
-			except Exception as e:
-				logger.error('\nError running agent: %s', str(e))
+				while True:
+					await self._pause_event.wait()  # Wait if paused
+					try:
+						await self.agent.run()
+						break  # Exit if run completes successfully
+					except Exception as e:
+						if not self.is_paused:  # Only log error if not paused
+							logger.error('\nError running agent: %s', str(e))
+						break
 			finally:
 				# Clear the running flag
 				self.agent.running = False
-
-				# No need to call update_info_panels() here as it's already updating via timer
-
 				logger.debug('\n✅ Task completed!')
 
 				# Make sure the task input container is visible
@@ -1149,6 +1163,20 @@ class BrowserUseApp(App):
 				yield Input(placeholder='Enter your task...', id='task-input')
 
 		yield Footer()
+
+	async def action_pause(self) -> None:
+		"""Toggle pause/resume of the agent."""
+		if not self.agent:
+			return
+
+		self.is_paused = not self.is_paused
+		if self.is_paused:
+			self._pause_event.clear()
+			self.query_one('#task-input').placeholder = "Press [Enter] to resume..."
+			self.query_one('#task-input').focus()
+		else:
+			self._pause_event.set()
+			self.query_one('#task-input').placeholder = "Enter your task..."
 
 
 async def run_prompt_mode(prompt: str, ctx: click.Context, debug: bool = False):
